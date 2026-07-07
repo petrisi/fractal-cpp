@@ -1,0 +1,20 @@
+# Build output
+build/
+
+# Generated images
+*.png
+
+# Agent workspace
+.lake/
+workspace/
+
+# IDE / editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
