@@ -1575,8 +1575,19 @@ static std::vector<uint8_t> render(const RenderParams &p)
 
 // ── PNG writing via stb_image_write ─────────────────────────────────────────
 
+// Suppress stb_image_write warnings (we only use PNG; the other writers
+// trigger -Wmissing-field-initializers on their internal context structs).
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#endif
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
+
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
 
 static bool write_png(const std::string &path,
                       const std::vector<uint8_t> &pixels, int w, int h)
