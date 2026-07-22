@@ -173,6 +173,10 @@ struct RenderParams {
     // For simplicity: use a pattern like "AABAB" encoded as lyapunov_pattern_len + array
     // We use a simple approach: repeat "AB" lyapunov_pattern times
     int    lyapunov_pattern = 2; // period of "AB" repetition (2 = "ABAB", 3 = "ABABAB")
+
+    // Rational: Julia constant c for z → z² + c - 1/z²
+    double rational_cr = 0.5;
+    double rational_ci = 0.3;
 };
 
 // ── CLI parsing ──────────────────────────────────────────────────────────────
@@ -211,6 +215,8 @@ static void print_usage(const char *prog)
        << "  -d <degree>       Polynomial degree n (default: 3)\n"
        << "\nTranscendental-specific:\n"
        << "  -f <1|2|3|4>      Function: 1=sin, 2=cos, 3=exp, 4=tanh (default: 1)\n"
+       << "\nRational-specific:\n"
+       << "  -j <re,im>       Rational constant c (default: 0.5,0.3)\n"
        << "\nClifford-specific:\n"
        << "  -a <value>         Clifford parameter a (default: -1.4)\n"
        << "  -bb <value>        Clifford parameter b (default: 1.6)\n"
@@ -302,8 +308,10 @@ static void set_type_defaults(RenderParams &p, FractalType type)
             break;
         case FractalType::Rational:
             p.cx = 0.0;  p.cy = 0.0;
-            p.zoom = 0.5;
+            p.zoom = 1.0;
             p.max_iter = 256;
+            p.rational_cr = 0.5;
+            p.rational_ci = 0.3;
             break;
         case FractalType::Clifford:
             p.clifford_a = -1.4;
@@ -416,6 +424,8 @@ static ParseResult parse_args(int argc, char **argv)
                 p.barnsley_ci = p.julia_ci;
                 p.nova_cr = p.julia_cr;
                 p.nova_ci = p.julia_ci;
+                p.rational_cr = p.julia_cr;
+                p.rational_ci = p.julia_ci;
             } catch (const std::exception &e) {
                 std::cerr << "error: bad julia constant '" << val
                           << "': " << e.what() << "\n";
@@ -909,89 +919,101 @@ static double phoenix_smooth(double zr, double zi, double cr, double ci,
 
 // ── Magnet 1 & Magnet 2: rational function iteration ─────────────────────────
 //
-// Derived from magnetic phase renormalization (Yang-Lee edge singularities).
-// Produces stunning Sierpinski-gasket-like structures.
+// Derived from magnetic phase renormalisation (Yang–Lee edge singularities).
+// The original Fractint formula (Kevin Allen, "The Beauty of Fractals") uses
+// the squared modulus of the rational function at each step:
 //
-// Magnet 1: z → ((z² + (c-1)) / (2z + (c-2)))²
-// Magnet 2: z → ((z³ + 3(c-1)z + (c-1)(c-2)) / (3z² + 3(c-2)z + (c-1)(c-2) + 1))²
+//   z ← | (numerator) / (denominator) |²          (real-valued)
 //
-// These are rational functions with poles (denominator = 0). When the
-// denominator approaches zero, |z| → ∞, which is treated as escape.
-// Uses a larger escape radius (10000) due to the rational function dynamics.
+// Because the output is always real and non-negative, zi is zero after the
+// first iteration.  We keep the full complex machinery for the first pass
+// (where zr may be zero and zi may be non-zero) and then switch to a
+// real-only inner loop for speed.
+//
+// Magnet 1: z → | (z² + (c-1)) / (2z + (c-2)) |²
+// Magnet 2: z → | (z³ + 3(c-1)z + (c-1)(c-2)) /
+//                  (3z² + 3(c-2)z + (c-1)(c-2) + 1) |²
 //
 // Mandelbrot mode: z₀ = 0, c = (cr, ci) from pixel position.
 
 constexpr double magnet_escape_radius_sq = 10000.0;
 constexpr double magnet_log2_log2_escape = std::log2(std::log2(std::sqrt(magnet_escape_radius_sq)));
-// |denominator|² below this → treat as pole escape. 1e-10 is safe for double
-// precision: it corresponds to |denominator| < 1e-5, far below any meaningful
-// orbit value while still catching the singularity before division blow-up.
 constexpr double magnet_pole_threshold   = 1.0e-10;
 
 static double magnet_smooth(double cr, double ci, int max_iter, int variant)
 {
     double zr = 0.0, zi = 0.0;
-    double zr_sq = 0.0, zi_sq = 0.0;
     int iter = 0;
 
-    // Precompute c-1 and c-2 (used in both variants)
     double cm1r = cr - 1.0, cm1i = ci;
     double cm2r = cr - 2.0, cm2i = ci;
 
-    while (zr_sq + zi_sq <= magnet_escape_radius_sq && iter < max_iter) {
-        double num_r, num_i, den_r, den_i, den_sq;
+    // ── First iteration (z may be complex) ─────────────────────────────
+    {
+        double zr_sq = zr * zr, zi_sq = zi * zi;
+        double num_r, num_i, den_r, den_i;
 
         if (variant == 1) {
-            // Magnet 1: ((z² + (c-1)) / (2z + (c-2)))²
-            // Numerator: z² + (c-1)
             num_r = zr_sq - zi_sq + cm1r;
             num_i = 2.0 * zr * zi + cm1i;
-
-            // Denominator: 2z + (c-2)
             den_r = 2.0 * zr + cm2r;
             den_i = 2.0 * zi + cm2i;
         } else {
-            // Magnet 2: ((z³ + 3(c-1)z + (c-1)(c-2)) / (3z² + 3(c-2)z + (c-1)(c-2) + 1))²
-            // z² = (zr² - zi²) + i(2·zr·zi)
-            double z2_r = zr_sq - zi_sq;
-            double z2_i = 2.0 * zr * zi;
-
-            // z³ = z · z²
+            double z2_r = zr_sq - zi_sq, z2_i = 2.0 * zr * zi;
             double z3_r = zr * z2_r - zi * z2_i;
             double z3_i = zr * z2_i + zi * z2_r;
-
-            // (c-1)(c-2)
             double c1c2_r = cm1r * cm2r - cm1i * cm2i;
             double c1c2_i = cm1r * cm2i + cm1i * cm2r;
-
-            // Numerator: z³ + 3(c-1)z + (c-1)(c-2)
             num_r = z3_r + 3.0 * (cm1r * zr - cm1i * zi) + c1c2_r;
             num_i = z3_i + 3.0 * (cm1r * zi + cm1i * zr) + c1c2_i;
-
-            // Denominator: 3z² + 3(c-2)z + (c-1)(c-2) + 1
             den_r = 3.0 * z2_r + 3.0 * (cm2r * zr - cm2i * zi) + c1c2_r + 1.0;
             den_i = 3.0 * z2_i + 3.0 * (cm2r * zi + cm2i * zr) + c1c2_i;
         }
 
-        den_sq = den_r * den_r + den_i * den_i;
-        if (den_sq <= magnet_pole_threshold) {
-            // Near a pole — denominator too small, treat as escape
-            break;
-        }
+        double den_sq = den_r * den_r + den_i * den_i;
+        if (den_sq <= magnet_pole_threshold)
+            return 1.0; // pole escape at iter 0
 
-        // Complex division: (num_r + i·num_i) / (den_r + i·den_i)
-        zr = (num_r * den_r + num_i * den_i) / den_sq;
-        zi = (num_i * den_r - num_r * den_i) / den_sq;
-        zr_sq = zr * zr;
-        zi_sq = zi * zi;
+        // |num/den|² = |num|² / |den|²
+        double num_sq = num_r * num_r + num_i * num_i;
+        zr = num_sq / den_sq;
+        zi = 0.0;
+        ++iter;
+    }
+
+    // ── Remaining iterations (z is real, zi = 0) ──────────────────────
+    while (zr * zr <= magnet_escape_radius_sq && iter < max_iter) {
+        if (variant == 1) {
+            // z is real: z² + (c-1) → real part = zr² + cm1r, imag = cm1i
+            //            2z + (c-2) → real part = 2·zr + cm2r, imag = cm2i
+            double num_sq = (zr * zr + cm1r) * (zr * zr + cm1r) + cm1i * cm1i;
+            double den_sq = (2.0 * zr + cm2r) * (2.0 * zr + cm2r) + cm2i * cm2i;
+            if (den_sq <= magnet_pole_threshold) break;
+            zr = num_sq / den_sq;
+        } else {
+            // z is real: compute |numerator|² and |denominator|²
+            double z2 = zr * zr;
+            double z3 = zr * z2;
+            double c1c2_r = cm1r * cm2r - cm1i * cm2i;
+            double c1c2_i = cm1r * cm2i + cm1i * cm2r;
+            // numerator = z³ + 3(c-1)z + (c-1)(c-2)
+            double num_re = z3 + 3.0 * cm1r * zr + c1c2_r;
+            double num_im = 3.0 * cm1i * zr + c1c2_i;
+            // denominator = 3z² + 3(c-2)z + (c-1)(c-2) + 1
+            double den_re = 3.0 * z2 + 3.0 * cm2r * zr + c1c2_r + 1.0;
+            double den_im = 3.0 * cm2i * zr + c1c2_i;
+            double num_sq = num_re * num_re + num_im * num_im;
+            double den_sq = den_re * den_re + den_im * den_im;
+            if (den_sq <= magnet_pole_threshold) break;
+            zr = num_sq / den_sq;
+        }
         ++iter;
     }
 
     if (iter == max_iter)
         return 0.0;
 
-    double total_sq = zr_sq + zi_sq;
-    double log_zn = std::log2(std::log2(std::sqrt(total_sq)));
+    double log_zn = std::log2(std::log2(std::sqrt(zr * zr)));
     return static_cast<double>(iter) - 1.0 + log_zn / magnet_log2_log2_escape;
 }
 
@@ -1063,6 +1085,10 @@ static double barnsley_smooth(double zr, double zi, double cr, double ci,
 // Colour by which root of unity the orbit converges to.
 // Returns 0.0 if no convergence within max_iter.
 
+// Nova escape radius — perturbed Newton orbits can diverge without ever
+// converging to a root.  Treat |z| > 50 as escape.
+constexpr double nova_escape_radius_sq = 2500.0;
+
 static double nova_smooth(double zr, double zi, int max_iter,
                           int degree, const newton_roots &roots,
                           double c_r, double c_i)
@@ -1074,27 +1100,29 @@ static double nova_smooth(double zr, double zi, int max_iter,
     while (iter < max_iter) {
         double r_sq = cur_r * cur_r + cur_i * cur_i;
         if (r_sq <= min_square_norm) {
-            // At the origin — derivative is zero, escape.
-            return 0.0;
+            return 0.0; // origin singularity
+        }
+        if (r_sq > nova_escape_radius_sq) {
+            // Diverged without converging — treat as escape with smooth value
+            double log_zn = std::log2(std::log2(std::sqrt(r_sq)));
+            double norm = std::log2(std::log2(std::sqrt(nova_escape_radius_sq)));
+            return static_cast<double>(iter) - 1.0 + log_zn / norm;
         }
 
         double r = std::sqrt(r_sq);
         double theta = std::atan2(cur_i, cur_r);
 
-        // 1/zⁿ⁻¹ in polar: r^(1-n)·e^(i(1-n)θ)
         double inv_r = std::pow(r, 1 - degree);
         double inv_angle = (1 - degree) * theta;
         double inv_znm1_r = inv_r * std::cos(inv_angle);
         double inv_znm1_i = inv_r * std::sin(inv_angle);
 
-        // z ← ((n-1)·z + 1/zⁿ⁻¹) / n + c
         double new_r = ((degree - 1) * cur_r + inv_znm1_r) / degree + c_r;
         double new_i = ((degree - 1) * cur_i + inv_znm1_i) / degree + c_i;
         cur_r = new_r;
         cur_i = new_i;
         ++iter;
 
-        // Check convergence to any root.
         for (int k = 0; k < degree; ++k) {
             double dr = cur_r - roots.re[k];
             double di = cur_i - roots.im[k];
@@ -1104,7 +1132,7 @@ static double nova_smooth(double zr, double zi, int max_iter,
         }
     }
 
-   return 0.0; // no convergence
+    return 0.0; // no convergence
 }
 
 // ── Transcendental: z → f(z) + c ─────────────────────────────────────────────
@@ -1177,42 +1205,35 @@ static double transcendental_smooth(double cr, double ci, int max_iter, int vari
 
 // ── Rational: z → z² + c - 1/z² ──────────────────────────────────────────────
 //
-// Rational function fractal. Produces Julia sets with characteristic
-// gasket-like structures and holes. The -1/z² term introduces a pole at
-// z = 0, creating regions where orbits are repelled from the origin.
+// Rational function fractal. The -1/z² term introduces a pole at z = 0,
+// creating gasket-like structures with characteristic holes.
 //
-// Mandelbrot mode: z₀ = 0, c = pixel position.
+// Julia mode: z₀ = pixel position, c = (rational_cr, rational_ci) fixed.
 // Uses a larger escape radius due to the rational dynamics.
 // Returns 0.0 for points that remain bounded, smooth value for escaping.
 
 constexpr double rational_escape_radius_sq = 10000.0;
 constexpr double rational_log2_log2_escape = std::log2(std::log2(std::sqrt(rational_escape_radius_sq)));
-constexpr double rational_pole_threshold   = 1.0e-10; // |z|² below this → pole escape
+constexpr double rational_pole_threshold   = 1.0e-10;
 
-static double rational_smooth(double cr, double ci, int max_iter)
+static double rational_smooth(double zr, double zi, double cr, double ci, int max_iter)
 {
-    double zr = 0.0, zi = 0.0;
-    double zr_sq = 0.0, zi_sq = 0.0;
+    double zr_sq = zr * zr, zi_sq = zi * zi;
     int iter = 0;
 
     while (zr_sq + zi_sq <= rational_escape_radius_sq && iter < max_iter) {
         double r_sq = zr_sq + zi_sq;
         if (r_sq <= rational_pole_threshold) {
-            // Near the pole at z = 0 — treat as escape
-            break;
+            break; // pole escape
         }
 
-        // z² = (zr² - zi²) + i(2·zr·zi)
         double z2_r = zr_sq - zi_sq;
         double z2_i = 2.0 * zr * zi;
 
-        // 1/z² = conj(z²) / |z²|² = (z2_r - i·z2_i) / (z2_r² + z2_i²)
-        // Note: |z²|² = |z|⁴ = r_sq²
         double r4 = r_sq * r_sq;
         double inv_z2_r = z2_r / r4;
         double inv_z2_i = -z2_i / r4;
 
-        // z ← z² + c - 1/z²
         zr = z2_r + cr - inv_z2_r;
         zi = z2_i + ci - inv_z2_i;
         zr_sq = zr * zr;
@@ -1515,7 +1536,7 @@ static std::vector<uint8_t> render(const RenderParams &p)
                     smooth = transcendental_smooth(cr, ci, p.max_iter, p.transcendental_variant);
                     break;
                 case FractalType::Rational:
-                    smooth = rational_smooth(cr, ci, p.max_iter);
+                    smooth = rational_smooth(cr, ci, p.rational_cr, p.rational_ci, p.max_iter);
                     break;
                 case FractalType::Clifford:
                     // Should never reach here — Clifford uses render_clifford()
