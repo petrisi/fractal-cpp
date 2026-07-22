@@ -1,8 +1,9 @@
 # Build output
 build/
 
-# Generated images
-*.png
+# Generated images (except showcase)
+build/*.png
+!showcase/
 
 # Agent workspace
 .lake/
@@ -14,6 +15,9 @@ workspace/
 *~
 .vscode/
 .idea/
+
+# Python venv
+.venv/
 
 # OS files
 .DS_Store
