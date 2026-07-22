@@ -32,6 +32,8 @@ A high-performance C++20 fractal renderer that produces PNG images from the comm
 | 11 | `transcendental` | z → f(z) + c; f ∈ {sin, cos, exp, tanh} | Mandelbrot | (0, 0), zoom=0.5 | `-f <1\|2\|3\|4>` (default: 1 = sin) |
 | 12 | `rational` | z → z² + c − 1/z² | Mandelbrot | (0, 0), zoom=0.5 | — |
 
+<img width="3220" height="1964" alt="image" src="https://github.com/user-attachments/assets/23bc9685-55dd-42b4-8e44-b8a12e596041" />
+
 ### Alternative rendering paradigms
 
 | # | Type | Approach | Default Parameters | Extra Flags |
