@@ -26,11 +26,11 @@ A high-performance C++20 fractal renderer that produces PNG images from the comm
 | 5 | `multibrot` | z → zⁿ + c | Mandelbrot | (-0.1, 0.7) | `-d <degree>` (default: 3; n=2 is standard Mandelbrot) |
 | 6 | `newton` | z → ((n-1)z + 1/zⁿ⁻¹) / n | Julia | (0, 0) | `-d <degree>` (default: 3; colours by root index) |
 | 7 | `phoenix` | z → z² + c + p·z[n-1] | Julia | (0, 0) | `-j <re,im>` (default: 0.5667, 0), `-p <val>` (default: -0.5) |
-| 8 | `magnet` | Magnet 1: ((z²+(c-1))/(2z+(c-2)))²; Magnet 2: cubic variant | Mandelbrot | (0, 0), zoom=0.3 | `-m <1\|2>` (default: 1) |
+| 8 | `magnet` | M1: \|(z²+(c-1))/(2z+(c-2))\|²; M2: cubic variant | Mandelbrot | (0, 0), zoom=0.3 | `-m <1\|2>` (default: 1) |
 | 9 | `barnsley` | V1: z²+c·Re(z); V2: z²+c·Im(z); V3: z²+c·Re(z)·Im(z) | Julia | (0, 0) | `-j <re,im>` (default: 0, 0), `-b <1\|2\|3>` (default: 1) |
 | 10 | `nova` | ((n-1)z + 1/zⁿ⁻¹) / n + c | Julia | (0, 0) | `-j <re,im>` (default: 0.3, 0.2), `-d <degree>` (default: 3) |
 | 11 | `transcendental` | z → f(z) + c; f ∈ {sin, cos, exp, tanh} | Mandelbrot | (0, 0), zoom=0.5 | `-f <1\|2\|3\|4>` (default: 1 = sin) |
-| 12 | `rational` | z → z² + c − 1/z² | Mandelbrot | (0, 0), zoom=0.5 | — |
+| 12 | `rational` | z → z² + c − 1/z² | Julia | (0, 0) | `-j <re,im>` (default: 0.5, 0.3) |
 
 <img width="3220" height="1964" alt="image" src="https://github.com/user-attachments/assets/23bc9685-55dd-42b4-8e44-b8a12e596041" />
 
@@ -102,6 +102,9 @@ The binary `mandelbrot` is produced in the `build/` directory.
 # Transcendental (cos variant)
 ./build/mandelbrot -t transcendental -f 2 -o transcendental_cos.png
 
+# Rational Julia set (pole at origin)
+./build/mandelbrot -t rational -j 0.5,0.3 -o rational.png
+
 # Clifford attractor with custom parameters
 ./build/mandelbrot -t clifford -a -1.8 -bb 1.6 -cc 1.0 -dd 0.7 -o clifford.png
 
@@ -139,15 +142,16 @@ mandelbrot
 - **Row-by-row rendering**: processes one scanline at a time for cache-friendly memory access.
 - **Overflow guards**: transcendental functions (`sin`, `cos`, `exp`) check argument bounds before calling libc to avoid silent `inf`/`NaN` propagation.
 - **Pole detection**: rational functions check `|denominator|² ≤ 1e-10` before division to avoid blow-up at singularities.
+- **Nova escape radius**: perturbed Newton orbits add an escape check (`|z| > 50`) for divergent orbits that never converge to a root.
 
 ## Notable fractals
 
 - **Phoenix** — Discovered by Shigehiro Ushiki (1988). A second-order recurrence (`z[n]` depends on `z[n-1]`) producing flame-like spirals. Uses conjugate-swap initialisation (`z₀ = conj(pixel)`, `z₋₁ = 0`) for correct orientation.
-- **Magnet** — Derived from magnetic phase renormalisation (Yang-Lee edge singularities). Produces Sierpinski-gasket-like structures via rational function iteration.
+- **Magnet** — Derived from magnetic phase renormalisation (Yang-Lee edge singularities). Iterates the squared modulus of a rational function, producing Sierpinski-gasket-like structures. Mandelbrot mode (`z₀ = 0`).
 - **Barnsley** — From Michael Barnsley's *Fractals Everywhere*. Three Julia-set variants that multiply the constant by `Re(z)`, `Im(z)`, or `Re(z)·Im(z)` to create crystalline structures.
 - **Nova** — Newton's method on `zⁿ − 1 = 0` with a constant perturbation `+c`. Small `c` values create Julia-like basin boundaries.
 - **Transcendental** — Replaces the polynomial `z²` with `sin`, `cos`, `exp`, or `tanh`. Produces wild, organic structures very different from polynomial fractals.
-- **Rational** — The `−1/z²` term introduces a pole at the origin, creating gasket-like structures with characteristic holes.
+- **Rational** — The `−1/z²` term introduces a pole at the origin. Rendered in Julia mode (`z₀ = pixel`, c fixed), creating structures with characteristic holes around the pole.
 - **Clifford** — A 2D discrete dynamical system (`x' = sin(ay) + c·cos(ax)`, `y' = sin(bx) + d·cos(by)`). Rendered as a density plot rather than escape-time.
 - **Lyapunov** — Computes the Lyapunov exponent `λ` for alternating logistic maps. `λ < 0` indicates stable orbits (attractors), `λ > 0` indicates chaos.
 
